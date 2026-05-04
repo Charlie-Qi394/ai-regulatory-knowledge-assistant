@@ -62,7 +62,7 @@ def review_excel_file_with_ai(filename: str, content: bytes) -> dict[str, Any]:
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         },
-        timeout=180,
+        timeout=300,
     )
     response.raise_for_status()
     return response.json()

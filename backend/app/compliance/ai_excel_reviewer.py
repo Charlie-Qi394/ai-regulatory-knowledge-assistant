@@ -12,7 +12,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from backend.app.compliance.excel_checker import ProductValue, load_product_values
+from backend.app.compliance.excel_checker import ProductValue, check_product_values, load_product_values
 from backend.app.rag.generator import build_sources, format_context, get_chat_model
 from backend.app.rag.embeddings import get_openai_api_key
 from backend.app.rag.retriever import RetrievedChunk, retrieve_relevant_chunks
@@ -45,12 +45,46 @@ JSON schema:
 }
 """
 
+BATCH_AI_REVIEW_SYSTEM_PROMPT = """You are an AI-assisted regulatory screening reviewer.
+Assess normalized Excel workbook rows using only the provided regulatory context and workbook context.
+Return JSON only.
+
+Allowed status values:
+- PASS: the value clearly meets a requirement in the context.
+- FAIL: the value clearly does not meet a requirement in the context.
+- NEEDS_REVIEW: the context is relevant but the decision requires human review, missing product details, or non-trivial interpretation.
+- INSUFFICIENT_CONTEXT: the context does not contain enough information to assess the row.
+
+Rules:
+- Do not use outside knowledge.
+- Do not invent thresholds or formulas.
+- You may use supporting values from other workbook rows for calculations.
+- If unit conversion or calculation is required but supporting values are missing, use NEEDS_REVIEW or INSUFFICIENT_CONTEXT.
+- Cite sources using labels like [Source 1].
+- Keep reasoning concise.
+- Return one result for every input row.
+
+JSON schema:
+{
+  "results": [
+    {
+      "row_index": 1,
+      "status": "PASS | FAIL | NEEDS_REVIEW | INSUFFICIENT_CONTEXT",
+      "requirement": "short requirement found in context, or empty string",
+      "reasoning": "short explanation with citations where available",
+      "citations": ["[Source 1]"]
+    }
+  ]
+}
+"""
+
 FALLBACK_REVIEW = {
     "status": "NEEDS_REVIEW",
     "requirement": "",
     "reasoning": "The AI review could not produce a structured assessment. Human review is required.",
     "citations": [],
 }
+MAX_AI_REVIEW_ROWS = 120
 
 
 def build_row_question(row: ProductValue) -> str:
@@ -66,6 +100,16 @@ def build_row_question(row: ProductValue) -> str:
     if row.notes:
         parts.append(f"notes {row.notes}")
     return " ".join(parts)
+
+
+def build_workbook_question(rows: list[ProductValue]) -> str:
+    """Create one retrieval query covering the normalized workbook."""
+    parameters = ", ".join(row.parameter for row in rows[:MAX_AI_REVIEW_ROWS] if row.parameter)
+    units = ", ".join(sorted({row.unit for row in rows[:MAX_AI_REVIEW_ROWS] if row.unit}))
+    return (
+        "Regulatory requirements, nutrient limits, product composition limits, unit conversions, "
+        f"and calculation rules for these product values: {parameters}. Units: {units}."
+    )
 
 
 def normalize_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -108,6 +152,38 @@ def parse_review_json(content: str | None) -> dict[str, Any]:
     return normalize_review_payload(payload)
 
 
+def parse_batch_review_json(content: str | None) -> dict[int, dict[str, Any]]:
+    """Parse model JSON output for a batch review."""
+    if not content:
+        return {}
+
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+
+    raw_results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(raw_results, list):
+        return {}
+
+    parsed: dict[int, dict[str, Any]] = {}
+    for raw_result in raw_results:
+        if not isinstance(raw_result, dict):
+            continue
+        try:
+            row_index = int(raw_result.get("row_index"))
+        except (TypeError, ValueError):
+            continue
+        parsed[row_index] = normalize_review_payload(raw_result)
+    return parsed
+
+
 def format_workbook_context(rows: list[ProductValue], max_rows: int = 80) -> str:
     """Format normalized workbook rows so the model can use supporting values."""
     lines: list[str] = []
@@ -119,6 +195,39 @@ def format_workbook_context(rows: list[ProductValue], max_rows: int = 80) -> str
     if len(rows) > max_rows:
         lines.append(f"... {len(rows) - max_rows} additional normalized rows omitted.")
     return "\n".join(lines)
+
+
+def review_rows_with_context(rows: list[ProductValue], chunks: list[RetrievedChunk]) -> dict[int, dict[str, Any]]:
+    """Use one chat-model call to assess multiple workbook rows."""
+    if not chunks:
+        return {}
+
+    rows_to_review = rows[:MAX_AI_REVIEW_ROWS]
+    workbook_context = format_workbook_context(rows_to_review, max_rows=MAX_AI_REVIEW_ROWS)
+    regulatory_context = format_context(chunks)
+    client = OpenAI(api_key=get_openai_api_key())
+
+    response = client.chat.completions.create(
+        model=get_chat_model(),
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": BATCH_AI_REVIEW_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Normalized workbook rows to review:\n"
+                    f"{workbook_context}\n\n"
+                    "Regulatory context:\n"
+                    f"{regulatory_context}\n\n"
+                    "Review every input row. Use workbook rows only as supporting product values. "
+                    "Use regulatory context as the source of requirements. Return JSON only."
+                ),
+            },
+        ],
+    )
+
+    return parse_batch_review_json(response.choices[0].message.content)
 
 
 def review_row_with_context(
@@ -169,13 +278,45 @@ def review_row_with_context(
 def ai_review_product_values(rows: list[ProductValue], top_k: int = 4) -> dict[str, Any]:
     """Review workbook rows using RAG retrieval and the chat model."""
     results: list[dict[str, Any]] = []
-    workbook_context = format_workbook_context(rows)
+    rows_to_review = rows[:MAX_AI_REVIEW_ROWS]
+    coded_results = check_product_values(rows_to_review)["results"]
+    question = build_workbook_question(rows_to_review)
+    chunks = retrieve_relevant_chunks(question=question, top_k=max(top_k, 10))
+    batch_reviews = review_rows_with_context(rows=rows_to_review, chunks=chunks)
+    sources = build_sources(chunks)
 
-    for row_index, row in enumerate(rows, start=1):
-        question = build_row_question(row)
-        chunks = retrieve_relevant_chunks(question=question, top_k=top_k)
-        review = review_row_with_context(row=row, chunks=chunks, workbook_context=workbook_context)
-        sources = build_sources(chunks)
+    for row_index, row in enumerate(rows_to_review, start=1):
+        coded_result = coded_results[row_index - 1]
+        if coded_result["status"] in {"PASS", "FAIL"}:
+            review = {
+                "status": coded_result["status"],
+                "requirement": coded_result["requirement"],
+                "reasoning": (
+                    "Coded calculation/check applied before AI screening. "
+                    f"{coded_result['notes']}".strip()
+                ),
+                "citations": [coded_result["source"]] if coded_result["source"] else [],
+            }
+            row_sources = []
+        elif chunks:
+            review = batch_reviews.get(
+                row_index,
+                {
+                    "status": "NEEDS_REVIEW",
+                    "requirement": "",
+                    "reasoning": "The AI review did not return a structured assessment for this row.",
+                    "citations": [],
+                },
+            )
+            row_sources = sources
+        else:
+            review = {
+                "status": "INSUFFICIENT_CONTEXT",
+                "requirement": "",
+                "reasoning": "No relevant document context was retrieved for this workbook.",
+                "citations": [],
+            }
+            row_sources = []
 
         results.append(
             {
@@ -188,7 +329,26 @@ def ai_review_product_values(rows: list[ProductValue], top_k: int = 4) -> dict[s
                 "requirement": review["requirement"],
                 "reasoning": review["reasoning"],
                 "citations": review["citations"],
-                "sources": sources,
+                "sources": row_sources,
+            }
+        )
+
+    for row_index, row in enumerate(rows[MAX_AI_REVIEW_ROWS:], start=MAX_AI_REVIEW_ROWS + 1):
+        results.append(
+            {
+                "row_index": row_index,
+                "parameter": row.parameter,
+                "input_value": row.value,
+                "input_unit": row.unit,
+                "category": row.category,
+                "status": "NEEDS_REVIEW",
+                "requirement": "",
+                "reasoning": (
+                    f"AI review is limited to the first {MAX_AI_REVIEW_ROWS} normalized rows per upload "
+                    "to keep the request responsive."
+                ),
+                "citations": [],
+                "sources": [],
             }
         )
 

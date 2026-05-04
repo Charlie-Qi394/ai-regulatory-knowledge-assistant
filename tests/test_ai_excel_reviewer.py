@@ -4,6 +4,7 @@ from backend.app.compliance.ai_excel_reviewer import (
     ai_review_product_values,
     build_row_question,
     format_workbook_context,
+    parse_batch_review_json,
     parse_review_json,
 )
 from backend.app.compliance.excel_checker import ProductValue
@@ -39,6 +40,16 @@ def test_parse_review_json_falls_back_for_invalid_payload() -> None:
     assert "structured assessment" in result["reasoning"]
 
 
+def test_parse_batch_review_json_maps_results_by_row_index() -> None:
+    result = parse_batch_review_json(
+        '{"results": [{"row_index": 2, "status": "fail", "requirement": "Limit", '
+        '"reasoning": "Above limit [Source 1].", "citations": ["[Source 1]"]}]}'
+    )
+
+    assert result[2]["status"] == "FAIL"
+    assert result[2]["requirement"] == "Limit"
+
+
 def test_format_workbook_context_includes_supporting_rows() -> None:
     rows = [
         ProductValue("Energy", 2720, "kJ/L", "Nutrition", ""),
@@ -69,17 +80,25 @@ def test_ai_review_product_values_summarizes_mocked_reviews(monkeypatch) -> None
     ]
 
     def fake_retrieve_relevant_chunks(question: str, top_k: int):
-        if "Unknown nutrient" in question:
-            return []
+        assert "Vitamin A" in question
+        assert "Unknown nutrient" in question
         return chunks
 
-    def fake_review_row_with_context(row, chunks, workbook_context=""):
-        assert "parameter=Vitamin A" in workbook_context
+    def fake_review_rows_with_context(rows, chunks):
+        assert rows[0].parameter == "Vitamin A"
         return {
-            "status": "PASS",
-            "requirement": "Vitamin A requirement from context.",
-            "reasoning": "The value meets the retrieved requirement [Source 1].",
-            "citations": ["[Source 1]"],
+            1: {
+                "status": "PASS",
+                "requirement": "Vitamin A requirement from context.",
+                "reasoning": "The value meets the retrieved requirement [Source 1].",
+                "citations": ["[Source 1]"],
+            },
+            2: {
+                "status": "NEEDS_REVIEW",
+                "requirement": "",
+                "reasoning": "No clear threshold was found [Source 1].",
+                "citations": ["[Source 1]"],
+            },
         }
 
     monkeypatch.setattr(
@@ -87,17 +106,36 @@ def test_ai_review_product_values_summarizes_mocked_reviews(monkeypatch) -> None
         fake_retrieve_relevant_chunks,
     )
     monkeypatch.setattr(
-        "backend.app.compliance.ai_excel_reviewer.review_row_with_context",
-        fake_review_row_with_context,
+        "backend.app.compliance.ai_excel_reviewer.review_rows_with_context",
+        fake_review_rows_with_context,
     )
 
     result = ai_review_product_values(rows)
 
     assert result["summary"] == {
         "total": 2,
-        "passed": 2,
+        "passed": 1,
         "failed": 0,
-        "needs_review": 0,
+        "needs_review": 1,
         "insufficient_context": 0,
     }
     assert result["results"][0]["sources"][0]["filename"] == "FSANZ Schedule 29.pdf"
+
+
+def test_ai_review_product_values_uses_coded_result_for_known_rules(monkeypatch) -> None:
+    rows = [ProductValue("Docosahexaenoic acid", 13, "mg/100 kJ", "", "")]
+
+    def fake_retrieve_relevant_chunks(question: str, top_k: int):
+        return []
+
+    monkeypatch.setattr(
+        "backend.app.compliance.ai_excel_reviewer.retrieve_relevant_chunks",
+        fake_retrieve_relevant_chunks,
+    )
+
+    result = ai_review_product_values(rows)
+
+    assert result["summary"]["failed"] == 1
+    assert result["results"][0]["status"] == "FAIL"
+    assert result["results"][0]["requirement"] == "<= 12 mg/100 kJ"
+    assert result["results"][0]["citations"] == ["FSANZ Schedule 29 section S29-4"]

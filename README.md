@@ -365,11 +365,13 @@ The same tab also includes `Run AI-assisted review`. This mode:
 
 - retrieves relevant regulatory chunks for each Excel row
 - gives the model normalized whole-workbook context so supporting values can be used in calculations
-- asks the chat model to assess each row using retrieved regulatory context
+- asks the chat model to assess normalized rows in a batched review using retrieved regulatory context
 - can attempt parameters beyond the deterministic rule list when the source documents contain enough context
 - returns `PASS`, `FAIL`, `NEEDS_REVIEW`, or `INSUFFICIENT_CONTEXT`
 - shows source excerpts used for each row
 - should be treated as screening support, not final compliance advice
+
+To keep the portfolio app responsive, AI-assisted review screens up to the first 120 normalized rows in one upload. Larger workbooks should be simplified or split into smaller files.
 
 Use deterministic checks when exact rules are already coded. Use AI-assisted review when you want broader coverage across workbook rows and are comfortable reviewing the cited evidence.
 

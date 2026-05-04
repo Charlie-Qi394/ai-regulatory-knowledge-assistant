@@ -119,11 +119,14 @@ with excel_tab:
                 )
 
     if uploaded_file is not None and ai_clicked:
-        with st.spinner("Retrieving regulatory context and running AI-assisted review..."):
+        with st.spinner("Scanning workbook, retrieving regulatory context, and running batched AI review..."):
             try:
                 result = review_excel_file_with_ai(uploaded_file.name, uploaded_file.getvalue())
             except RequestException as exc:
-                st.error(f"AI-assisted review failed: {exc}")
+                st.error(
+                    "AI-assisted review failed or took too long. Try the coded-rule check first, "
+                    f"or simplify very large workbooks. Details: {exc}"
+                )
             else:
                 summary = result["summary"]
                 passed, failed, needs_review, insufficient = st.columns(4)
