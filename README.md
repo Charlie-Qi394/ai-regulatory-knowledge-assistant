@@ -10,6 +10,8 @@ Important: this project is for education and portfolio demonstration only. It is
 
 The AI Regulatory Knowledge Assistant lets a user ask natural-language questions about a local collection of regulatory or technical documents. The app ingests documents, chunks them, creates embeddings, stores vectors in PostgreSQL using pgvector, retrieves relevant chunks for a question, and generates a grounded answer with source references.
 
+It also includes a small Excel compliance-checking MVP. Users can upload a `.xlsx` workbook with product values, and the backend applies selected deterministic FSANZ infant-formula numeric checks, including simple unit conversion where the required supporting value is available.
+
 Supported document types:
 
 - `.txt`
@@ -44,7 +46,7 @@ The project shows how I think about:
 
 ## 3. Key Features
 
-- FastAPI backend with health check, `/ask`, and `/history` endpoints
+- FastAPI backend with health check, `/ask`, `/history`, and `/check-excel` endpoints
 - Streamlit frontend for asking questions and reviewing sources
 - PostgreSQL database with pgvector vector search
 - Document ingestion for `.txt`, `.pdf`, and `.docx`
@@ -58,6 +60,7 @@ The project shows how I think about:
 - Simple CSV evaluation for regression checks
 - Optional RAGAS evaluation for advanced RAG diagnostics
 - Docker Compose setup for PostgreSQL, backend, and frontend
+- Excel upload checker for selected deterministic infant-formula compliance calculations
 
 ## 4. Tech Stack
 
@@ -68,6 +71,7 @@ Backend:
 - Pydantic
 - psycopg2
 - python-dotenv
+- openpyxl
 
 Frontend:
 
@@ -101,7 +105,7 @@ Dev and deployment:
                 |   localhost:8501     |
                 +----------+-----------+
                            |
-                           | HTTP /ask, /history
+                           | HTTP /ask, /history, /check-excel
                            v
                 +----------------------+
                 |   FastAPI Backend    |
@@ -117,6 +121,18 @@ Dev and deployment:
 +--------------------+          | query history         |
                                 +----------------------+
 ```
+
+Excel compliance checks are handled separately from the LLM workflow:
+
+```text
+Excel workbook
+  -> parse rows with openpyxl
+  -> normalize units and parameters
+  -> apply deterministic Python rules
+  -> return PASS, FAIL, or NEEDS_REVIEW with source notes
+```
+
+This separation is intentional. The LLM can help answer document questions, but numerical compliance calculations should be explicit, testable Python logic.
 
 Project structure:
 
@@ -309,6 +325,39 @@ FastAPI docs: http://localhost:8000/docs
 Streamlit:    http://localhost:8501
 ```
 
+### Excel Compliance Checker
+
+The Streamlit app includes an `Excel compliance checker` tab. Upload a `.xlsx` workbook with these columns:
+
+```text
+parameter,value,unit,category
+Energy,2720,kJ/L,
+Protein,15,g/L,milk-based
+Docosahexaenoic acid,10,mg/100 kJ,
+Total trans fatty acids,3,% of total fatty acids,
+```
+
+Required columns:
+
+- `parameter`
+- `value`
+- `unit`
+
+Optional columns:
+
+- `category`
+- `notes`
+
+Current deterministic checks:
+
+- Energy content: `2510-2930 kJ/L`
+- Milk-based protein: `0.43-0.72 g/100 kJ`
+- Non-milk-based protein: `0.54-0.72 g/100 kJ`
+- Docosahexaenoic acid: `<= 12 mg/100 kJ`
+- Total trans fatty acids: `<= 4% of total fatty acids`
+
+Protein values entered as `g/L` can be converted to `g/100 kJ` when the workbook also includes energy in `kJ/L`.
+
 Run tests:
 
 ```bash
@@ -399,6 +448,13 @@ For public FSANZ infant formula documents:
 - How is vitamin A content calculated for infant formula products under Schedule 29?
 - What is the limit for total trans fatty acids in infant formula products under Schedule 29?
 
+Example Excel compliance checker rows:
+
+- `Energy,2720,kJ/L,`
+- `Protein,15,g/L,milk-based`
+- `Docosahexaenoic acid,13,mg/100 kJ,`
+- `Total trans fatty acids,3,% of total fatty acids,`
+
 For synthetic technical documents:
 
 - What should be checked before a product label is approved?
@@ -474,6 +530,7 @@ Suggested screenshots:
 
 - Streamlit home screen with a regulatory question entered
 - Generated answer with source expanders open
+- Excel compliance checker with uploaded workbook results
 - Recent query history in the sidebar
 - FastAPI Swagger docs at `/docs`
 - Optional evaluation CSV or terminal summary
@@ -497,12 +554,16 @@ docs/screenshots/
 - The context sufficiency and verification checks are intentionally simple.
 - Query history stores questions and answers but does not include user accounts or authentication.
 - There is no document upload UI yet; documents are added through `data/sample_docs/`.
+- The Excel checker supports only a small set of deterministic demonstration rules.
+- Excel checks do not replace expert regulatory, quality, or legal review.
 - No production security hardening, access control, audit logging, or deployment pipeline is included.
 - RAGAS metrics are useful for diagnostics but do not prove regulatory correctness.
 
 ## 15. Future Improvements
 
 - Add a document upload workflow in the Streamlit UI.
+- Expand the Excel checker with more structured templates and additional rules.
+- Add table extraction from PDFs to help map clause references into deterministic checks.
 - Add hybrid retrieval using keyword search plus vector search.
 - Improve PDF table extraction and clause-level citation handling.
 - Add reranking for retrieved chunks.

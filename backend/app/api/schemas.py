@@ -47,3 +47,35 @@ class HistoryResponse(BaseModel):
     """Response returned by GET /history."""
 
     history: list[HistoryItem]
+
+
+class ComplianceResult(BaseModel):
+    """One deterministic Excel compliance-check result."""
+
+    parameter: str
+    input_value: Optional[float]
+    input_unit: str
+    category: str
+    converted_value: Optional[float]
+    converted_unit: str
+    requirement: str
+    status: str
+    source: str
+    notes: str
+
+
+class ComplianceSummary(BaseModel):
+    """Summary counts for an Excel compliance check."""
+
+    total: int
+    passed: int
+    failed: int
+    needs_review: int
+
+
+class ComplianceCheckResponse(BaseModel):
+    """Response returned by POST /check-excel."""
+
+    filename: str
+    summary: ComplianceSummary
+    results: list[ComplianceResult]

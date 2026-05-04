@@ -32,3 +32,20 @@ def fetch_history() -> list[dict[str, Any]]:
     response = requests.get(f"{get_api_base_url()}/history", timeout=15)
     response.raise_for_status()
     return response.json().get("history", [])
+
+
+def check_excel_file(filename: str, content: bytes) -> dict[str, Any]:
+    """Send an Excel workbook to the FastAPI `/check-excel` endpoint."""
+    response = requests.post(
+        f"{get_api_base_url()}/check-excel",
+        files={
+            "file": (
+                filename,
+                content,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()

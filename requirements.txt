@@ -9,6 +9,8 @@ openai>=1.59.0,<3.0.0
 langgraph>=0.2.60,<1.0.0
 pypdf==5.1.0
 python-docx==1.1.2
+openpyxl==3.1.5
+python-multipart==0.0.20
 
 # Planned later-stage dependencies:
 # pgvector

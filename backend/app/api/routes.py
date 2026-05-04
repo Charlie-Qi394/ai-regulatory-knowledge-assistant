@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from psycopg2 import Error as PsycopgError
 
-from backend.app.api.schemas import AskRequest, AskResponse, HistoryResponse
+from backend.app.api.schemas import (
+    AskRequest,
+    AskResponse,
+    ComplianceCheckResponse,
+    HistoryResponse,
+)
 from backend.app.api.service import ask_and_save, get_recent_history
+from backend.app.compliance.excel_checker import check_excel_workbook
 
 
 router = APIRouter()
@@ -50,3 +56,23 @@ def history() -> HistoryResponse:
         raise HTTPException(status_code=503, detail="Database is unavailable.") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/check-excel", response_model=ComplianceCheckResponse)
+async def check_excel(file: UploadFile = File(...)) -> ComplianceCheckResponse:
+    """Check uploaded Excel product values against selected deterministic rules."""
+    filename = file.filename or "uploaded.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Please upload a .xlsx file.")
+
+    try:
+        content = await file.read()
+        result = check_excel_workbook(content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return ComplianceCheckResponse(
+        filename=filename,
+        summary=result["summary"],
+        results=result["results"],
+    )
