@@ -26,7 +26,11 @@ Do not make unsupported claims.
 If the context does not contain enough information, say:
 "I do not have enough information in the provided documents to answer this confidently."
 Keep the answer professional and concise.
-Use citations like [Source 1] and [Source 2] when referencing context."""
+Use citations like [Source 1] and [Source 2] when referencing context.
+Use plain text only.
+Do not use LaTeX, markdown tables, code blocks, or raw formulas with backslashes.
+Do not assume missing values or perform calculations unless all required values are explicitly present in the context.
+If a calculation needs a value that is not in the context, explain which value is missing and use the fallback sentence."""
 
 
 class Source(TypedDict):
