@@ -77,28 +77,20 @@ with ask_tab:
 with excel_tab:
     st.subheader("Excel Compliance Checker")
     st.caption(
-        "Upload a .xlsx file with columns: parameter, value, unit, and optional category. "
-        "Use deterministic checks for coded rules, or AI-assisted review for broader regulatory screening."
+        "Upload a .xlsx workbook. The app scans all sheets, infers product values, and then runs "
+        "coded-rule checks or AI-assisted regulatory screening."
     )
     st.info(
-        "The rows below are examples of the workbook format only. "
-        "AI-assisted review can attempt any parameter in your uploaded file when the regulatory documents "
-        "contain enough relevant context. Deterministic mode is limited to coded demonstration rules."
-    )
-    st.markdown("**Example workbook format**")
-    st.code(
-        "parameter,value,unit,category\n"
-        "Energy,2720,kJ/L,\n"
-        "Protein,15,g/L,milk-based\n"
-        "Docosahexaenoic acid,10,mg/100 kJ,\n"
-        "Total trans fatty acids,3,% of total fatty acids,"
+        "No fixed template is required. The scanner looks for parameter names, numeric values, and units "
+        "near each other across the workbook. Clear labels and units still improve review quality."
     )
 
     uploaded_file = st.file_uploader("Upload product data workbook", type=["xlsx"])
     deterministic_clicked = st.button(
-        "Run deterministic check",
+        "Run coded-rule check",
         type="primary",
         disabled=uploaded_file is None,
+        help="Scans the workbook first, then applies exact Python checks where rules have been coded.",
     )
     ai_clicked = st.button(
         "Run AI-assisted review",

@@ -1,8 +1,8 @@
-"""Deterministic Excel compliance checks for selected infant-formula rules.
+"""Excel parsing and deterministic checks for selected infant-formula rules.
 
-This module parses a simple Excel input, applies explicit Python calculations,
-and returns auditable pass/fail/needs-review rows with source notes. Broader
-AI-assisted screening lives in `ai_excel_reviewer.py`.
+This module scans uploaded workbooks into normalized product-value rows, then
+applies explicit Python checks where rules have been coded. Broader AI-assisted
+screening lives in `ai_excel_reviewer.py`.
 """
 
 from __future__ import annotations
@@ -15,6 +15,29 @@ from openpyxl import load_workbook
 
 
 REQUIRED_COLUMNS = {"parameter", "value", "unit"}
+HEADER_ALIASES = {
+    "parameter": {"parameter", "nutrient", "component", "analyte", "item", "name", "description"},
+    "value": {"value", "amount", "result", "quantity", "level", "target", "declared value"},
+    "unit": {"unit", "units", "uom"},
+    "category": {"category", "type", "product type", "class"},
+    "notes": {"notes", "note", "comment", "comments"},
+}
+UNIT_TOKENS = (
+    "kj",
+    "kcal",
+    "g",
+    "mg",
+    "ug",
+    "µg",
+    "mcg",
+    "iu",
+    "%",
+    "re",
+    "alpha-te",
+    "l",
+    "100",
+)
+MAX_INFERRED_ROWS = 200
 
 
 @dataclass(frozen=True)
@@ -110,6 +133,27 @@ def normalize_unit(value: object) -> str:
     return aliases.get(unit, str(value or "").strip())
 
 
+def is_likely_unit(value: object) -> bool:
+    """Return whether a text cell looks like a measurement unit."""
+    text = normalize_text(value)
+    if not text:
+        return False
+    compact = text.replace(" ", "")
+    if compact in {
+        "kj/l",
+        "g/l",
+        "g/100kj",
+        "mg/100kj",
+        "ug/100kj",
+        "µg/100kj",
+        "mcg/100kj",
+        "%oftotalfattyacids",
+        "%",
+    }:
+        return True
+    return any(token in compact for token in UNIT_TOKENS) and any(char.isdigit() for char in compact)
+
+
 def parse_float(value: object) -> float | None:
     """Parse numeric cell values while tolerating percentage strings."""
     if value is None or value == "":
@@ -123,43 +167,190 @@ def parse_float(value: object) -> float | None:
         return None
 
 
-def load_product_values(workbook_bytes: bytes) -> list[ProductValue]:
-    """Load product values from the first sheet of an uploaded workbook."""
-    workbook = load_workbook(BytesIO(workbook_bytes), data_only=True)
-    sheet = workbook.active
+def map_header_cell(value: object) -> str | None:
+    """Map a workbook header cell to a normalized internal column name."""
+    text = normalize_text(value)
+    if not text:
+        return None
+    for column, aliases in HEADER_ALIASES.items():
+        if text in aliases:
+            return column
+    return None
 
-    header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
-    if not header_row:
-        raise ValueError("Workbook must include a header row.")
 
-    headers = [normalize_text(header) for header in header_row]
-    header_map = {header: index for index, header in enumerate(headers) if header}
-    missing = REQUIRED_COLUMNS - set(header_map)
-    if missing:
-        missing_columns = ", ".join(sorted(missing))
-        raise ValueError(f"Workbook is missing required column(s): {missing_columns}.")
+def find_header_map(rows: list[tuple[object, ...]]) -> tuple[int, dict[str, int]] | None:
+    """Find a flexible parameter/value/unit header row if one exists."""
+    for row_index, row in enumerate(rows[:25]):
+        header_map: dict[str, int] = {}
+        for column_index, cell in enumerate(row):
+            mapped = map_header_cell(cell)
+            if mapped and mapped not in header_map:
+                header_map[mapped] = column_index
+        if REQUIRED_COLUMNS <= set(header_map):
+            return row_index, header_map
+    return None
 
+
+def row_cell(row: tuple[object, ...], index: int | None) -> object:
+    """Safely return a row cell."""
+    if index is None or index >= len(row):
+        return ""
+    return row[index]
+
+
+def values_from_header_table(
+    rows: list[tuple[object, ...]],
+    header_index: int,
+    header_map: dict[str, int],
+    sheet_name: str,
+) -> list[ProductValue]:
+    """Extract values from a recognized table with parameter/value/unit columns."""
     values: list[ProductValue] = []
-    for row in sheet.iter_rows(min_row=2, values_only=True):
+    for row in rows[header_index + 1 :]:
         if not any(cell not in (None, "") for cell in row):
             continue
 
-        def get_cell(column: str) -> object:
-            index = header_map.get(column)
-            return row[index] if index is not None and index < len(row) else ""
+        parameter = str(row_cell(row, header_map["parameter"]) or "").strip()
+        value = parse_float(row_cell(row, header_map["value"]))
+        unit = str(row_cell(row, header_map["unit"]) or "").strip()
+        category = str(row_cell(row, header_map.get("category")) or sheet_name).strip()
+        notes = str(row_cell(row, header_map.get("notes")) or "").strip()
 
-        values.append(
-            ProductValue(
-                parameter=str(get_cell("parameter") or "").strip(),
-                value=parse_float(get_cell("value")),
-                unit=str(get_cell("unit") or "").strip(),
-                category=str(get_cell("category") or "").strip(),
-                notes=str(get_cell("notes") or "").strip(),
-            )
+        if parameter and value is not None and unit:
+            values.append(ProductValue(parameter, value, unit, category, notes))
+
+    return values
+
+
+def nearest_text_left(row: tuple[object, ...], numeric_index: int) -> str:
+    """Find the nearest useful text label to the left of a numeric value."""
+    for index in range(numeric_index - 1, -1, -1):
+        cell = row[index]
+        if isinstance(cell, str) and normalize_text(cell) and not is_likely_unit(cell):
+            return cell.strip()
+    return ""
+
+
+def nearest_unit(row: tuple[object, ...], header_row: tuple[object, ...] | None, numeric_index: int) -> str:
+    """Infer a unit from adjacent cells or a header row."""
+    for index in range(numeric_index + 1, min(len(row), numeric_index + 4)):
+        cell = row[index]
+        if isinstance(cell, str) and is_likely_unit(cell):
+            return cell.strip()
+
+    for index in range(numeric_index - 1, max(-1, numeric_index - 4), -1):
+        cell = row[index]
+        if isinstance(cell, str) and is_likely_unit(cell):
+            return cell.strip()
+
+    if header_row and numeric_index < len(header_row):
+        header = header_row[numeric_index]
+        if isinstance(header, str) and is_likely_unit(header):
+            return header.strip()
+    return ""
+
+
+def nearby_category(row: tuple[object, ...], numeric_index: int, sheet_name: str) -> str:
+    """Infer optional category/type text near a value."""
+    category_terms: list[str] = []
+    for index in range(numeric_index + 1, min(len(row), numeric_index + 5)):
+        cell = row[index]
+        if not isinstance(cell, str):
+            continue
+        text = cell.strip()
+        if not text or is_likely_unit(text):
+            continue
+        category_terms.append(text)
+
+    if category_terms:
+        return " ".join(category_terms)
+    return sheet_name
+
+
+def infer_values_from_sheet(rows: list[tuple[object, ...]], sheet_name: str) -> list[ProductValue]:
+    """Infer product values from a sheet without requiring fixed headers."""
+    values: list[ProductValue] = []
+    recent_header: tuple[object, ...] | None = None
+
+    for row_number, row in enumerate(rows, start=1):
+        if not any(cell not in (None, "") for cell in row):
+            continue
+
+        text_cells = [cell for cell in row if isinstance(cell, str) and normalize_text(cell)]
+        numeric_indexes = [index for index, cell in enumerate(row) if parse_float(cell) is not None]
+        if text_cells and not numeric_indexes:
+            recent_header = row
+            continue
+
+        for numeric_index in numeric_indexes:
+            value = parse_float(row[numeric_index])
+            if value is None:
+                continue
+
+            parameter = nearest_text_left(row, numeric_index)
+            if not parameter and recent_header and numeric_index < len(recent_header):
+                header = recent_header[numeric_index]
+                if isinstance(header, str) and not is_likely_unit(header):
+                    parameter = header.strip()
+
+            unit = nearest_unit(row, recent_header, numeric_index)
+            if parameter and unit:
+                values.append(
+                    ProductValue(
+                        parameter=parameter,
+                        value=value,
+                        unit=unit,
+                        category=nearby_category(row, numeric_index, sheet_name),
+                        notes=f"Inferred from sheet {sheet_name}, row {row_number}.",
+                    )
+                )
+
+            if len(values) >= MAX_INFERRED_ROWS:
+                return values
+
+    return values
+
+
+def deduplicate_values(values: list[ProductValue]) -> list[ProductValue]:
+    """Remove duplicate inferred rows while preserving order."""
+    seen: set[tuple[str, float | None, str, str]] = set()
+    unique_values: list[ProductValue] = []
+    for value in values:
+        key = (
+            normalize_text(value.parameter),
+            value.value,
+            normalize_unit(value.unit),
+            normalize_text(value.category),
         )
+        if key not in seen:
+            seen.add(key)
+            unique_values.append(value)
+    return unique_values
 
+
+def load_product_values(workbook_bytes: bytes) -> list[ProductValue]:
+    """Smart-scan all workbook sheets into normalized product values."""
+    workbook = load_workbook(BytesIO(workbook_bytes), data_only=True)
+    values: list[ProductValue] = []
+
+    for sheet in workbook.worksheets:
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            continue
+
+        header_result = find_header_map(rows)
+        if header_result:
+            header_index, header_map = header_result
+            values.extend(values_from_header_table(rows, header_index, header_map, sheet.title))
+        else:
+            values.extend(infer_values_from_sheet(rows, sheet.title))
+
+    values = deduplicate_values(values)
     if not values:
-        raise ValueError("Workbook does not contain any product data rows.")
+        raise ValueError(
+            "Workbook scan did not find product values. Include parameter names, numeric values, "
+            "and units near each other so the smart scanner can infer rows."
+        )
 
     return values
 

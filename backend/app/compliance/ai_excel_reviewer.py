@@ -19,7 +19,7 @@ from backend.app.rag.retriever import RetrievedChunk, retrieve_relevant_chunks
 
 
 AI_REVIEW_SYSTEM_PROMPT = """You are an AI-assisted regulatory screening reviewer.
-Assess one Excel row using only the provided regulatory context.
+Assess one Excel row using only the provided regulatory context and the normalized workbook context.
 Return JSON only.
 
 Allowed status values:
@@ -31,6 +31,7 @@ Allowed status values:
 Rules:
 - Do not use outside knowledge.
 - Do not invent thresholds or formulas.
+- You may use supporting values from the normalized workbook context for calculations.
 - If unit conversion or calculation is required but supporting values are missing, use NEEDS_REVIEW or INSUFFICIENT_CONTEXT.
 - Cite sources using labels like [Source 1].
 - Keep reasoning concise.
@@ -107,7 +108,24 @@ def parse_review_json(content: str | None) -> dict[str, Any]:
     return normalize_review_payload(payload)
 
 
-def review_row_with_context(row: ProductValue, chunks: list[RetrievedChunk]) -> dict[str, Any]:
+def format_workbook_context(rows: list[ProductValue], max_rows: int = 80) -> str:
+    """Format normalized workbook rows so the model can use supporting values."""
+    lines: list[str] = []
+    for index, row in enumerate(rows[:max_rows], start=1):
+        lines.append(
+            f"Row {index}: parameter={row.parameter}; value={row.value}; "
+            f"unit={row.unit}; category={row.category}; notes={row.notes}"
+        )
+    if len(rows) > max_rows:
+        lines.append(f"... {len(rows) - max_rows} additional normalized rows omitted.")
+    return "\n".join(lines)
+
+
+def review_row_with_context(
+    row: ProductValue,
+    chunks: list[RetrievedChunk],
+    workbook_context: str = "",
+) -> dict[str, Any]:
     """Use the chat model to assess one workbook row against retrieved context."""
     if not chunks:
         return {
@@ -134,9 +152,12 @@ def review_row_with_context(row: ProductValue, chunks: list[RetrievedChunk]) -> 
                     f"unit: {row.unit}\n"
                     f"category: {row.category}\n"
                     f"notes: {row.notes}\n\n"
+                    "Normalized workbook context:\n"
+                    f"{workbook_context}\n\n"
                     "Regulatory context:\n"
                     f"{context}\n\n"
-                    "Assess this row against the context and return JSON only."
+                    "Assess this row against the regulatory context. Use normalized workbook context only "
+                    "for supporting product values needed for calculations. Return JSON only."
                 ),
             },
         ],
@@ -148,11 +169,12 @@ def review_row_with_context(row: ProductValue, chunks: list[RetrievedChunk]) -> 
 def ai_review_product_values(rows: list[ProductValue], top_k: int = 4) -> dict[str, Any]:
     """Review workbook rows using RAG retrieval and the chat model."""
     results: list[dict[str, Any]] = []
+    workbook_context = format_workbook_context(rows)
 
     for row_index, row in enumerate(rows, start=1):
         question = build_row_question(row)
         chunks = retrieve_relevant_chunks(question=question, top_k=top_k)
-        review = review_row_with_context(row=row, chunks=chunks)
+        review = review_row_with_context(row=row, chunks=chunks, workbook_context=workbook_context)
         sources = build_sources(chunks)
 
         results.append(

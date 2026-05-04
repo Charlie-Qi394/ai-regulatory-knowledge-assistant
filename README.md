@@ -126,7 +126,8 @@ Excel compliance checks are handled separately from the LLM workflow:
 
 ```text
 Excel workbook
-  -> parse rows with openpyxl
+  -> smart-scan all sheets with openpyxl
+  -> infer parameter, value, unit, category, and notes
   -> normalize units and parameters
   -> apply deterministic Python rules
   -> return PASS, FAIL, or NEEDS_REVIEW with source notes
@@ -138,7 +139,8 @@ The app also provides an AI-assisted Excel review path for broader screening:
 
 ```text
 Excel workbook
-  -> parse rows with openpyxl
+  -> smart-scan all sheets with openpyxl
+  -> infer normalized product-value rows
   -> retrieve regulatory chunks for each row
   -> ask the LLM to assess only from retrieved context
   -> return PASS, FAIL, NEEDS_REVIEW, or INSUFFICIENT_CONTEXT
@@ -340,26 +342,14 @@ Streamlit:    http://localhost:8501
 
 ### Excel Compliance Checker
 
-The Streamlit app includes an `Excel compliance checker` tab. Upload a `.xlsx` workbook with these columns. The rows below are examples of the format only, not the full list of supported parameters:
+The Streamlit app includes an `Excel compliance checker` tab. Upload a `.xlsx` workbook; a fixed template is not required. The scanner reads all sheets and looks for parameter names, numeric values, and units near each other.
 
-```text
-parameter,value,unit,category
-Energy,2720,kJ/L,
-Protein,15,g/L,milk-based
-Docosahexaenoic acid,10,mg/100 kJ,
-Total trans fatty acids,3,% of total fatty acids,
-```
+The scanner works best when the workbook contains clear labels such as:
 
-Required columns:
-
-- `parameter`
-- `value`
-- `unit`
-
-Optional columns:
-
-- `category`
-- `notes`
+- parameter or nutrient names
+- numeric values
+- units such as `kJ/L`, `g/L`, `g/100 kJ`, `mg/100 kJ`, or `% of total fatty acids`
+- optional category/type/notes nearby
 
 Current deterministic checks:
 
@@ -374,7 +364,8 @@ Protein values entered as `g/L` can be converted to `g/100 kJ` when the workbook
 The same tab also includes `Run AI-assisted review`. This mode:
 
 - retrieves relevant regulatory chunks for each Excel row
-- asks the chat model to assess the row using only retrieved context
+- gives the model normalized whole-workbook context so supporting values can be used in calculations
+- asks the chat model to assess each row using retrieved regulatory context
 - can attempt parameters beyond the deterministic rule list when the source documents contain enough context
 - returns `PASS`, `FAIL`, `NEEDS_REVIEW`, or `INSUFFICIENT_CONTEXT`
 - shows source excerpts used for each row

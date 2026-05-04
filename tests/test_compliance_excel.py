@@ -5,7 +5,12 @@ from io import BytesIO
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
-from backend.app.compliance.excel_checker import ProductValue, check_excel_workbook, check_product_values
+from backend.app.compliance.excel_checker import (
+    ProductValue,
+    check_excel_workbook,
+    check_product_values,
+    load_product_values,
+)
 from backend.main import app
 
 
@@ -52,20 +57,42 @@ def test_check_product_values_flags_failures_and_review_items() -> None:
     assert result["results"][2]["status"] == "NEEDS_REVIEW"
 
 
-def test_check_excel_workbook_requires_expected_columns() -> None:
+def test_load_product_values_scans_rows_without_fixed_headers() -> None:
     workbook = Workbook()
     sheet = workbook.active
-    sheet.append(["parameter", "value"])
-    sheet.append(["Energy", 2720])
+    sheet.title = "Nutrition Panel"
+    sheet.append(["Product nutrition data"])
+    sheet.append(["Energy", 2720, "kJ/L"])
+    sheet.append(["Protein", 15, "g/L", "milk-based"])
     output = BytesIO()
     workbook.save(output)
 
-    try:
-        check_excel_workbook(output.getvalue())
-    except ValueError as exc:
-        assert "unit" in str(exc)
-    else:
-        raise AssertionError("Expected missing column ValueError")
+    values = load_product_values(output.getvalue())
+
+    assert values[0].parameter == "Energy"
+    assert values[0].value == 2720
+    assert values[0].unit == "kJ/L"
+    assert values[0].category == "Nutrition Panel"
+    assert values[1].parameter == "Protein"
+    assert values[1].category == "milk-based"
+
+
+def test_load_product_values_scans_multiple_sheets() -> None:
+    workbook = Workbook()
+    first_sheet = workbook.active
+    first_sheet.title = "Macronutrients"
+    first_sheet.append(["Nutrient", "Amount", "Units"])
+    first_sheet.append(["Energy", 2720, "kJ/L"])
+
+    second_sheet = workbook.create_sheet("Fatty acids")
+    second_sheet.append(["Total trans fatty acids", 3, "% of total fatty acids"])
+    output = BytesIO()
+    workbook.save(output)
+
+    values = load_product_values(output.getvalue())
+
+    assert [value.parameter for value in values] == ["Energy", "Total trans fatty acids"]
+    assert values[1].category == "Fatty acids"
 
 
 def test_check_excel_endpoint_accepts_xlsx_upload() -> None:

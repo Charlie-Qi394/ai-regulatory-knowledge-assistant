@@ -3,6 +3,7 @@
 from backend.app.compliance.ai_excel_reviewer import (
     ai_review_product_values,
     build_row_question,
+    format_workbook_context,
     parse_review_json,
 )
 from backend.app.compliance.excel_checker import ProductValue
@@ -38,6 +39,19 @@ def test_parse_review_json_falls_back_for_invalid_payload() -> None:
     assert "structured assessment" in result["reasoning"]
 
 
+def test_format_workbook_context_includes_supporting_rows() -> None:
+    rows = [
+        ProductValue("Energy", 2720, "kJ/L", "Nutrition", ""),
+        ProductValue("Protein", 15, "g/L", "Nutrition", "Inferred row"),
+    ]
+
+    context = format_workbook_context(rows)
+
+    assert "parameter=Energy" in context
+    assert "value=2720" in context
+    assert "parameter=Protein" in context
+
+
 def test_ai_review_product_values_summarizes_mocked_reviews(monkeypatch) -> None:
     rows = [
         ProductValue("Vitamin A", 80, "ug RE/100 kJ", "", ""),
@@ -59,7 +73,8 @@ def test_ai_review_product_values_summarizes_mocked_reviews(monkeypatch) -> None
             return []
         return chunks
 
-    def fake_review_row_with_context(row, chunks):
+    def fake_review_row_with_context(row, chunks, workbook_context=""):
+        assert "parameter=Vitamin A" in workbook_context
         return {
             "status": "PASS",
             "requirement": "Vitamin A requirement from context.",
