@@ -358,6 +358,12 @@ Focus on infant formula protein, energy, DHA, vitamin A, and unit conversions.
 Check whether each value meets FSANZ requirements.
 ```
 
+The focus field can also narrow workbook columns/categories before review:
+
+```text
+Please check the Spec Min (Can / NIP) and Spec Max (Can / NIP) for each nutrient.
+```
+
 Current deterministic checks:
 
 - Energy content: `2510-2930 kJ/L`
@@ -372,7 +378,7 @@ The same tab also includes `Run AI-assisted review`. This mode:
 
 - retrieves relevant regulatory chunks for each Excel row
 - gives the model normalized whole-workbook context so supporting values can be used in calculations
-- uses the user's focus instructions to prioritize the required checks
+- uses the user's focus instructions to prioritize and, where possible, narrow the required checks
 - asks the chat model to assess normalized rows in a batched review using retrieved regulatory context
 - can attempt parameters beyond the deterministic rule list when the source documents contain enough context
 - returns `PASS`, `FAIL`, `NEEDS_REVIEW`, or `INSUFFICIENT_CONTEXT`

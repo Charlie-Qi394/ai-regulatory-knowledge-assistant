@@ -12,7 +12,12 @@ from typing import Any
 
 from openai import OpenAI
 
-from backend.app.compliance.excel_checker import ProductValue, check_product_values, load_product_values
+from backend.app.compliance.excel_checker import (
+    ProductValue,
+    check_product_values,
+    load_product_values,
+    normalize_text,
+)
 from backend.app.rag.generator import build_sources, format_context, get_chat_model
 from backend.app.rag.embeddings import get_openai_api_key
 from backend.app.rag.retriever import RetrievedChunk, retrieve_relevant_chunks
@@ -113,6 +118,60 @@ def build_workbook_question(rows: list[ProductValue], focus_instructions: str = 
         "Regulatory requirements, nutrient limits, product composition limits, unit conversions, "
         f"and calculation rules for these product values: {parameters}. Units: {units}.{focus_text}"
     )
+
+
+def focus_category_terms(focus_instructions: str) -> list[str]:
+    """Extract category/column terms that should narrow workbook review rows."""
+    focus = normalize_text(focus_instructions).replace("/", " / ")
+    terms: list[str] = []
+
+    if "spec min" in focus:
+        terms.append("spec min")
+    if "spec max" in focus:
+        terms.append("spec max")
+    if "can / nip" in focus or "cannip" in focus.replace(" ", ""):
+        terms.append("can / nip")
+    if "old fsanz min" in focus:
+        terms.append("old fsanz min")
+    if "old fsanz max" in focus:
+        terms.append("old fsanz max")
+    if "review target" in focus:
+        terms.append("review target")
+    if "can target" in focus:
+        terms.append("can target")
+
+    return terms
+
+
+def row_matches_focus(row: ProductValue, category_terms: list[str]) -> bool:
+    """Return whether a normalized row matches category focus terms."""
+    if not category_terms:
+        return True
+
+    category = normalize_text(row.category).replace("/", " / ")
+    compact_category = category.replace(" ", "")
+
+    has_specific_limit = any(term in {"spec min", "spec max", "old fsanz min", "old fsanz max"} for term in category_terms)
+    for term in category_terms:
+        if term == "can / nip":
+            if "can / nip" in category or "cannip" in compact_category:
+                if not has_specific_limit:
+                    return True
+                continue
+        elif term in category:
+            return True
+
+    return False
+
+
+def select_rows_for_focus(rows: list[ProductValue], focus_instructions: str) -> list[ProductValue]:
+    """Use user focus instructions to narrow rows before AI review."""
+    category_terms = focus_category_terms(focus_instructions)
+    if not category_terms:
+        return rows
+
+    focused_rows = [row for row in rows if row_matches_focus(row, category_terms)]
+    return focused_rows or rows
 
 
 def normalize_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -292,7 +351,8 @@ def ai_review_product_values(
 ) -> dict[str, Any]:
     """Review workbook rows using RAG retrieval and the chat model."""
     results: list[dict[str, Any]] = []
-    rows_to_review = rows[:MAX_AI_REVIEW_ROWS]
+    focused_rows = select_rows_for_focus(rows, focus_instructions)
+    rows_to_review = focused_rows[:MAX_AI_REVIEW_ROWS]
     coded_results = check_product_values(rows_to_review)["results"]
     question = build_workbook_question(rows_to_review, focus_instructions=focus_instructions)
     chunks = retrieve_relevant_chunks(question=question, top_k=max(top_k, 10))

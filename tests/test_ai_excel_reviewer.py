@@ -7,6 +7,7 @@ from backend.app.compliance.ai_excel_reviewer import (
     format_workbook_context,
     parse_batch_review_json,
     parse_review_json,
+    select_rows_for_focus,
 )
 from backend.app.compliance.excel_checker import ProductValue
 
@@ -71,6 +72,25 @@ def test_format_workbook_context_includes_supporting_rows() -> None:
     assert "parameter=Energy" in context
     assert "value=2720" in context
     assert "parameter=Protein" in context
+
+
+def test_select_rows_for_focus_filters_spec_min_and_max_can_nip_rows() -> None:
+    rows = [
+        ProductValue("Protein", 11.8, "g", "Can Target (= Total x 0.976)", ""),
+        ProductValue("Protein", 10.4, "g", "Spec Min (Can / NIP)", ""),
+        ProductValue("Protein", 13.8, "g", "Spec Max (Can / NIP)", ""),
+        ProductValue("Protein", 9.51, "g", "Old FSANZ Min (per 100g)", ""),
+    ]
+
+    selected = select_rows_for_focus(
+        rows,
+        "Please check the spec min (can/NIP) and spec Max (can/NIP) for each nutrient.",
+    )
+
+    assert [(row.parameter, row.category) for row in selected] == [
+        ("Protein", "Spec Min (Can / NIP)"),
+        ("Protein", "Spec Max (Can / NIP)"),
+    ]
 
 
 def test_ai_review_product_values_summarizes_mocked_reviews(monkeypatch) -> None:
