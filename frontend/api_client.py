@@ -51,10 +51,11 @@ def check_excel_file(filename: str, content: bytes) -> dict[str, Any]:
     return response.json()
 
 
-def review_excel_file_with_ai(filename: str, content: bytes) -> dict[str, Any]:
+def review_excel_file_with_ai(filename: str, content: bytes, focus_instructions: str = "") -> dict[str, Any]:
     """Send an Excel workbook to the FastAPI `/review-excel-ai` endpoint."""
     response = requests.post(
         f"{get_api_base_url()}/review-excel-ai",
+        data={"focus_instructions": focus_instructions},
         files={
             "file": (
                 filename,

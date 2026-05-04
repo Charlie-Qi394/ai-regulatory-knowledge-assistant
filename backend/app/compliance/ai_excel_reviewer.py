@@ -59,6 +59,7 @@ Rules:
 - Do not use outside knowledge.
 - Do not invent thresholds or formulas.
 - You may use supporting values from other workbook rows for calculations.
+- Prioritize the user's focus instructions when provided, but still return one result for every input row.
 - If unit conversion or calculation is required but supporting values are missing, use NEEDS_REVIEW or INSUFFICIENT_CONTEXT.
 - Cite sources using labels like [Source 1].
 - Keep reasoning concise.
@@ -102,13 +103,15 @@ def build_row_question(row: ProductValue) -> str:
     return " ".join(parts)
 
 
-def build_workbook_question(rows: list[ProductValue]) -> str:
+def build_workbook_question(rows: list[ProductValue], focus_instructions: str = "") -> str:
     """Create one retrieval query covering the normalized workbook."""
     parameters = ", ".join(row.parameter for row in rows[:MAX_AI_REVIEW_ROWS] if row.parameter)
     units = ", ".join(sorted({row.unit for row in rows[:MAX_AI_REVIEW_ROWS] if row.unit}))
+    focus = focus_instructions.strip()
+    focus_text = f" User focus instructions: {focus}." if focus else ""
     return (
         "Regulatory requirements, nutrient limits, product composition limits, unit conversions, "
-        f"and calculation rules for these product values: {parameters}. Units: {units}."
+        f"and calculation rules for these product values: {parameters}. Units: {units}.{focus_text}"
     )
 
 
@@ -197,7 +200,11 @@ def format_workbook_context(rows: list[ProductValue], max_rows: int = 80) -> str
     return "\n".join(lines)
 
 
-def review_rows_with_context(rows: list[ProductValue], chunks: list[RetrievedChunk]) -> dict[int, dict[str, Any]]:
+def review_rows_with_context(
+    rows: list[ProductValue],
+    chunks: list[RetrievedChunk],
+    focus_instructions: str = "",
+) -> dict[int, dict[str, Any]]:
     """Use one chat-model call to assess multiple workbook rows."""
     if not chunks:
         return {}
@@ -218,9 +225,12 @@ def review_rows_with_context(rows: list[ProductValue], chunks: list[RetrievedChu
                 "content": (
                     "Normalized workbook rows to review:\n"
                     f"{workbook_context}\n\n"
+                    "User focus instructions:\n"
+                    f"{focus_instructions.strip() or 'No specific focus instructions provided.'}\n\n"
                     "Regulatory context:\n"
                     f"{regulatory_context}\n\n"
-                    "Review every input row. Use workbook rows only as supporting product values. "
+                    "Review every input row, but prioritize the user's focus instructions. "
+                    "Use workbook rows only as supporting product values. "
                     "Use regulatory context as the source of requirements. Return JSON only."
                 ),
             },
@@ -275,14 +285,22 @@ def review_row_with_context(
     return parse_review_json(response.choices[0].message.content)
 
 
-def ai_review_product_values(rows: list[ProductValue], top_k: int = 4) -> dict[str, Any]:
+def ai_review_product_values(
+    rows: list[ProductValue],
+    top_k: int = 4,
+    focus_instructions: str = "",
+) -> dict[str, Any]:
     """Review workbook rows using RAG retrieval and the chat model."""
     results: list[dict[str, Any]] = []
     rows_to_review = rows[:MAX_AI_REVIEW_ROWS]
     coded_results = check_product_values(rows_to_review)["results"]
-    question = build_workbook_question(rows_to_review)
+    question = build_workbook_question(rows_to_review, focus_instructions=focus_instructions)
     chunks = retrieve_relevant_chunks(question=question, top_k=max(top_k, 10))
-    batch_reviews = review_rows_with_context(rows=rows_to_review, chunks=chunks)
+    batch_reviews = review_rows_with_context(
+        rows=rows_to_review,
+        chunks=chunks,
+        focus_instructions=focus_instructions,
+    )
     sources = build_sources(chunks)
 
     for row_index, row in enumerate(rows_to_review, start=1):
@@ -362,7 +380,11 @@ def ai_review_product_values(rows: list[ProductValue], top_k: int = 4) -> dict[s
     return {"summary": summary, "results": results}
 
 
-def ai_review_excel_workbook(workbook_bytes: bytes, top_k: int = 4) -> dict[str, Any]:
+def ai_review_excel_workbook(
+    workbook_bytes: bytes,
+    top_k: int = 4,
+    focus_instructions: str = "",
+) -> dict[str, Any]:
     """Parse and AI-review an uploaded Excel workbook."""
     rows = load_product_values(workbook_bytes)
-    return ai_review_product_values(rows=rows, top_k=top_k)
+    return ai_review_product_values(rows=rows, top_k=top_k, focus_instructions=focus_instructions)

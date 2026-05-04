@@ -136,8 +136,9 @@ def test_check_excel_endpoint_rejects_non_xlsx_upload() -> None:
 def test_ai_review_excel_endpoint_accepts_xlsx_upload(monkeypatch) -> None:
     workbook_bytes = build_workbook([("Vitamin A", 80, "ug RE/100 kJ", "infant formula")])
 
-    def fake_ai_review_excel_workbook(content: bytes) -> dict[str, object]:
+    def fake_ai_review_excel_workbook(content: bytes, focus_instructions: str = "") -> dict[str, object]:
         assert content == workbook_bytes
+        assert focus_instructions == "Focus on vitamin A."
         return {
             "summary": {
                 "total": 1,
@@ -177,6 +178,7 @@ def test_ai_review_excel_endpoint_accepts_xlsx_upload(monkeypatch) -> None:
     client = TestClient(app)
     response = client.post(
         "/review-excel-ai",
+        data={"focus_instructions": "Focus on vitamin A."},
         files={
             "file": (
                 "product_check.xlsx",

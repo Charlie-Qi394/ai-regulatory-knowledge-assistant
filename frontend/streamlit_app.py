@@ -84,6 +84,17 @@ with excel_tab:
         "No fixed template is required. The scanner looks for parameter names, numeric values, and units "
         "near each other across the workbook. Clear labels and units still improve review quality."
     )
+    focus_instructions = st.text_area(
+        "Tell the tool what to focus on",
+        placeholder=(
+            "Example: Focus on infant formula protein, energy, DHA, vitamin A, and unit conversions. "
+            "Check whether each value meets FSANZ requirements."
+        ),
+        help=(
+            "Optional. Use this to define the type of checks required or the specific nutrients, "
+            "calculations, units, product category, or regulations the review should prioritize."
+        ),
+    )
 
     uploaded_file = st.file_uploader("Upload product data workbook", type=["xlsx"])
     deterministic_clicked = st.button(
@@ -121,7 +132,11 @@ with excel_tab:
     if uploaded_file is not None and ai_clicked:
         with st.spinner("Scanning workbook, retrieving regulatory context, and running batched AI review..."):
             try:
-                result = review_excel_file_with_ai(uploaded_file.name, uploaded_file.getvalue())
+                result = review_excel_file_with_ai(
+                    uploaded_file.name,
+                    uploaded_file.getvalue(),
+                    focus_instructions=focus_instructions,
+                )
             except RequestException as exc:
                 st.error(
                     "AI-assisted review failed or took too long. Try the coded-rule check first, "

@@ -2,6 +2,7 @@
 
 from backend.app.compliance.ai_excel_reviewer import (
     ai_review_product_values,
+    build_workbook_question,
     build_row_question,
     format_workbook_context,
     parse_batch_review_json,
@@ -20,6 +21,15 @@ def test_build_row_question_includes_key_row_fields() -> None:
     assert "ug RE/100 kJ" in question
     assert "infant formula" in question
     assert "label target" in question
+
+
+def test_build_workbook_question_includes_focus_instructions() -> None:
+    rows = [ProductValue("Protein", 15, "g/L", "milk-based", "")]
+
+    question = build_workbook_question(rows, focus_instructions="Focus on protein conversion.")
+
+    assert "Protein" in question
+    assert "Focus on protein conversion." in question
 
 
 def test_parse_review_json_normalizes_valid_payload() -> None:
@@ -84,8 +94,9 @@ def test_ai_review_product_values_summarizes_mocked_reviews(monkeypatch) -> None
         assert "Unknown nutrient" in question
         return chunks
 
-    def fake_review_rows_with_context(rows, chunks):
+    def fake_review_rows_with_context(rows, chunks, focus_instructions=""):
         assert rows[0].parameter == "Vitamin A"
+        assert focus_instructions == "Focus on vitamin A."
         return {
             1: {
                 "status": "PASS",
@@ -110,7 +121,7 @@ def test_ai_review_product_values_summarizes_mocked_reviews(monkeypatch) -> None
         fake_review_rows_with_context,
     )
 
-    result = ai_review_product_values(rows)
+    result = ai_review_product_values(rows, focus_instructions="Focus on vitamin A.")
 
     assert result["summary"] == {
         "total": 2,

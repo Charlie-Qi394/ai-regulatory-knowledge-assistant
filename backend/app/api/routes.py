@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from psycopg2 import Error as PsycopgError
 
 from backend.app.api.schemas import (
@@ -81,7 +81,10 @@ async def check_excel(file: UploadFile = File(...)) -> ComplianceCheckResponse:
 
 
 @router.post("/review-excel-ai", response_model=AiComplianceCheckResponse)
-async def review_excel_ai(file: UploadFile = File(...)) -> AiComplianceCheckResponse:
+async def review_excel_ai(
+    file: UploadFile = File(...),
+    focus_instructions: str = Form(""),
+) -> AiComplianceCheckResponse:
     """AI-review uploaded Excel product values against retrieved regulatory context."""
     filename = file.filename or "uploaded.xlsx"
     if not filename.lower().endswith(".xlsx"):
@@ -89,7 +92,7 @@ async def review_excel_ai(file: UploadFile = File(...)) -> AiComplianceCheckResp
 
     try:
         content = await file.read()
-        result = ai_review_excel_workbook(content)
+        result = ai_review_excel_workbook(content, focus_instructions=focus_instructions)
     except PsycopgError as exc:
         raise HTTPException(status_code=503, detail="Database is unavailable.") from exc
     except RuntimeError as exc:

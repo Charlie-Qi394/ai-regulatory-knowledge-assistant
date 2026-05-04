@@ -351,6 +351,13 @@ The scanner works best when the workbook contains clear labels such as:
 - units such as `kJ/L`, `g/L`, `g/100 kJ`, `mg/100 kJ`, or `% of total fatty acids`
 - optional category/type/notes nearby
 
+The Excel tab includes a `Tell the tool what to focus on` field. Use it to define the checks or items the AI-assisted review should prioritize, for example:
+
+```text
+Focus on infant formula protein, energy, DHA, vitamin A, and unit conversions.
+Check whether each value meets FSANZ requirements.
+```
+
 Current deterministic checks:
 
 - Energy content: `2510-2930 kJ/L`
@@ -365,6 +372,7 @@ The same tab also includes `Run AI-assisted review`. This mode:
 
 - retrieves relevant regulatory chunks for each Excel row
 - gives the model normalized whole-workbook context so supporting values can be used in calculations
+- uses the user's focus instructions to prioritize the required checks
 - asks the chat model to assess normalized rows in a batched review using retrieved regulatory context
 - can attempt parameters beyond the deterministic rule list when the source documents contain enough context
 - returns `PASS`, `FAIL`, `NEEDS_REVIEW`, or `INSUFFICIENT_CONTEXT`
