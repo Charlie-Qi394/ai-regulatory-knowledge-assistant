@@ -95,6 +95,51 @@ def test_load_product_values_scans_multiple_sheets() -> None:
     assert values[1].category == "Fatty acids"
 
 
+def test_load_product_values_uses_nutrient_column_as_parameter_anchor() -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Step 1 Review"
+    sheet.append(["Core Fields"])
+    sheet.append(["Nutrient", "Unit", "Can Target (= Total x 0.976)", "Old FSANZ Min", "Status"])
+    sheet.append(["Protein (Nx 6.25)", "g/100 kJ", 0.58, 0.43, "Pass"])
+    sheet.append(["LA^", "%", 0.2299, 9, "Fail"])
+    sheet.append(["DHA", "mg/100 kJ", 13, 12, "Fail"])
+    output = BytesIO()
+    workbook.save(output)
+
+    values = load_product_values(output.getvalue())
+
+    assert [value.parameter for value in values] == [
+        "Protein (Nx 6.25)",
+        "Protein (Nx 6.25)",
+        "LA^",
+        "LA^",
+        "DHA",
+        "DHA",
+    ]
+    assert all(value.parameter not in {"mg", "N/A", "Fail"} for value in values)
+    assert values[0].unit == "g/100 kJ"
+    assert values[0].category == "Can Target (= Total x 0.976)"
+
+
+def test_load_product_values_reads_short_units_from_unit_column() -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Step 1 Review"
+    sheet.append(["Nutrient", "Unit", "Can Target", None])
+    sheet.append(["Energy", "kJ", 2092.656, 2102])
+    sheet.append(["Protein (Nx 6.25)", "g", 11.8096, 11.7])
+    output = BytesIO()
+    workbook.save(output)
+
+    values = load_product_values(output.getvalue())
+
+    assert [(value.parameter, value.unit, value.category) for value in values] == [
+        ("Energy", "kJ", "Can Target"),
+        ("Protein (Nx 6.25)", "g", "Can Target"),
+    ]
+
+
 def test_check_excel_endpoint_accepts_xlsx_upload() -> None:
     workbook_bytes = build_workbook(
         [

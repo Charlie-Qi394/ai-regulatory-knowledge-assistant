@@ -22,6 +22,7 @@ HEADER_ALIASES = {
     "category": {"category", "type", "product type", "class"},
     "notes": {"notes", "note", "comment", "comments"},
 }
+PARAMETER_HEADER_ALIASES = HEADER_ALIASES["parameter"]
 UNIT_TOKENS = (
     "kj",
     "kcal",
@@ -37,7 +38,9 @@ UNIT_TOKENS = (
     "l",
     "100",
 )
+STANDALONE_UNITS = {"kj", "kcal", "g", "mg", "ug", "µg", "mcg", "iu", "%", "n/a", "na"}
 MAX_INFERRED_ROWS = 200
+STATUS_WORDS = {"pass", "fail", "review", "needs review", "step 1 review", "n/a", "na"}
 
 
 @dataclass(frozen=True)
@@ -141,7 +144,15 @@ def is_likely_unit(value: object) -> bool:
     compact = text.replace(" ", "")
     if compact in {
         "kj/l",
+        "kj",
+        "kcal",
+        "g",
         "g/l",
+        "mg",
+        "ug",
+        "µg",
+        "mcg",
+        "iu",
         "g/100kj",
         "mg/100kj",
         "ug/100kj",
@@ -149,7 +160,11 @@ def is_likely_unit(value: object) -> bool:
         "mcg/100kj",
         "%oftotalfattyacids",
         "%",
+        "n/a",
+        "na",
     }:
+        return True
+    if compact in STANDALONE_UNITS:
         return True
     return any(token in compact for token in UNIT_TOKENS) and any(char.isdigit() for char in compact)
 
@@ -188,6 +203,15 @@ def find_header_map(rows: list[tuple[object, ...]]) -> tuple[int, dict[str, int]
                 header_map[mapped] = column_index
         if REQUIRED_COLUMNS <= set(header_map):
             return row_index, header_map
+    return None
+
+
+def find_parameter_header(rows: list[tuple[object, ...]]) -> tuple[int, int] | None:
+    """Find a nutrient/parameter column even when value and unit headers are absent."""
+    for row_index, row in enumerate(rows[:40]):
+        for column_index, cell in enumerate(row):
+            if normalize_text(cell) in PARAMETER_HEADER_ALIASES:
+                return row_index, column_index
     return None
 
 
@@ -250,6 +274,34 @@ def nearest_unit(row: tuple[object, ...], header_row: tuple[object, ...] | None,
     return ""
 
 
+def nearest_unit_for_parameter_row(
+    row: tuple[object, ...],
+    header_row: tuple[object, ...] | None,
+    parameter_index: int,
+    numeric_index: int,
+) -> str:
+    """Infer unit in rows where a nutrient/parameter column anchors the row."""
+    for index in range(parameter_index + 1, min(len(row), numeric_index)):
+        cell = row[index]
+        if isinstance(cell, str) and is_likely_unit(cell):
+            return cell.strip()
+    return nearest_unit(row, header_row, numeric_index)
+
+
+def value_column_label(header_row: tuple[object, ...] | None, numeric_index: int) -> str:
+    """Return a readable label for a numeric value column."""
+    if header_row and numeric_index < len(header_row):
+        label = header_row[numeric_index]
+        if label not in (None, ""):
+            return str(label).strip()
+    return f"column {numeric_index + 1}"
+
+
+def has_value_column_label(header_row: tuple[object, ...] | None, numeric_index: int) -> bool:
+    """Return whether a numeric column has a meaningful header label."""
+    return bool(header_row and numeric_index < len(header_row) and row_cell(header_row, numeric_index) not in (None, ""))
+
+
 def nearby_category(row: tuple[object, ...], numeric_index: int, sheet_name: str) -> str:
     """Infer optional category/type text near a value."""
     category_terms: list[str] = []
@@ -265,6 +317,51 @@ def nearby_category(row: tuple[object, ...], numeric_index: int, sheet_name: str
     if category_terms:
         return " ".join(category_terms)
     return sheet_name
+
+
+def values_from_parameter_column_table(
+    rows: list[tuple[object, ...]],
+    header_index: int,
+    parameter_index: int,
+    sheet_name: str,
+) -> list[ProductValue]:
+    """Extract values from sheets where a Nutrient column anchors each row."""
+    values: list[ProductValue] = []
+    header_row = rows[header_index]
+
+    for row_number, row in enumerate(rows[header_index + 1 :], start=header_index + 2):
+        parameter_cell = row_cell(row, parameter_index)
+        parameter = str(parameter_cell or "").strip()
+        normalized_parameter = normalize_text(parameter)
+        if not parameter or normalized_parameter in STATUS_WORDS or is_likely_unit(parameter):
+            continue
+
+        numeric_indexes = [
+            index
+            for index, cell in enumerate(row)
+            if index != parameter_index
+            and parse_float(cell) is not None
+            and has_value_column_label(header_row, index)
+        ]
+        for numeric_index in numeric_indexes:
+            unit = nearest_unit_for_parameter_row(row, header_row, parameter_index, numeric_index)
+            if not unit:
+                continue
+
+            values.append(
+                ProductValue(
+                    parameter=parameter,
+                    value=parse_float(row[numeric_index]),
+                    unit=unit,
+                    category=value_column_label(header_row, numeric_index) or sheet_name,
+                    notes=f"Inferred from sheet {sheet_name}, row {row_number}.",
+                )
+            )
+
+            if len(values) >= MAX_INFERRED_ROWS:
+                return values
+
+    return values
 
 
 def infer_values_from_sheet(rows: list[tuple[object, ...]], sheet_name: str) -> list[ProductValue]:
@@ -342,6 +439,9 @@ def load_product_values(workbook_bytes: bytes) -> list[ProductValue]:
         if header_result:
             header_index, header_map = header_result
             values.extend(values_from_header_table(rows, header_index, header_map, sheet.title))
+        elif parameter_header := find_parameter_header(rows):
+            header_index, parameter_index = parameter_header
+            values.extend(values_from_parameter_column_table(rows, header_index, parameter_index, sheet.title))
         else:
             values.extend(infer_values_from_sheet(rows, sheet.title))
 
