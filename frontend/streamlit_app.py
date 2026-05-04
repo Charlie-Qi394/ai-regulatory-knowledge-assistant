@@ -3,7 +3,13 @@
 import streamlit as st
 from requests import RequestException
 
-from frontend.api_client import check_excel_file, ask_question, fetch_history, get_api_base_url
+from frontend.api_client import (
+    ask_question,
+    check_excel_file,
+    fetch_history,
+    get_api_base_url,
+    review_excel_file_with_ai,
+)
 
 
 st.set_page_config(page_title="AI Regulatory Knowledge Assistant", layout="wide")
@@ -72,7 +78,7 @@ with excel_tab:
     st.subheader("Excel Compliance Checker")
     st.caption(
         "Upload a .xlsx file with columns: parameter, value, unit, and optional category. "
-        "This MVP checks selected FSANZ infant-formula numeric rules with deterministic Python logic."
+        "Use deterministic checks for coded rules, or AI-assisted review for broader regulatory screening."
     )
     st.code(
         "parameter,value,unit,category\n"
@@ -83,7 +89,18 @@ with excel_tab:
     )
 
     uploaded_file = st.file_uploader("Upload product data workbook", type=["xlsx"])
-    if uploaded_file is not None and st.button("Check Excel", type="primary"):
+    deterministic_clicked = st.button(
+        "Run deterministic check",
+        type="primary",
+        disabled=uploaded_file is None,
+    )
+    ai_clicked = st.button(
+        "Run AI-assisted review",
+        disabled=uploaded_file is None,
+        help="Uses RAG retrieval and the chat model. Slower, broader, and should be treated as screening only.",
+    )
+
+    if uploaded_file is not None and deterministic_clicked:
         with st.spinner("Checking workbook..."):
             try:
                 result = check_excel_file(uploaded_file.name, uploaded_file.getvalue())
@@ -101,4 +118,53 @@ with excel_tab:
                 st.caption(
                     "This checker is a portfolio MVP. It supports selected deterministic rules only "
                     "and is not legal, regulatory, compliance, or quality advice."
+                )
+
+    if uploaded_file is not None and ai_clicked:
+        with st.spinner("Retrieving regulatory context and running AI-assisted review..."):
+            try:
+                result = review_excel_file_with_ai(uploaded_file.name, uploaded_file.getvalue())
+            except RequestException as exc:
+                st.error(f"AI-assisted review failed: {exc}")
+            else:
+                summary = result["summary"]
+                passed, failed, needs_review, insufficient = st.columns(4)
+                passed.metric("Passed", summary["passed"])
+                failed.metric("Failed", summary["failed"])
+                needs_review.metric("Needs review", summary["needs_review"])
+                insufficient.metric("Insufficient context", summary.get("insufficient_context", 0))
+
+                st.subheader("AI-Assisted Review Results")
+                table_rows = [
+                    {
+                        "row": row["row_index"],
+                        "parameter": row["parameter"],
+                        "value": row["input_value"],
+                        "unit": row["input_unit"],
+                        "category": row["category"],
+                        "status": row["status"],
+                        "requirement": row["requirement"],
+                        "reasoning": row["reasoning"],
+                    }
+                    for row in result["results"]
+                ]
+                st.dataframe(table_rows, use_container_width=True)
+
+                for row in result["results"]:
+                    with st.expander(f"Row {row['row_index']}: {row['parameter']} | {row['status']}"):
+                        st.write(row["reasoning"])
+                        if row["citations"]:
+                            st.caption("Citations: " + ", ".join(row["citations"]))
+                        for source in row.get("sources", []):
+                            st.markdown(
+                                f"**[Source {source['source_id']}] {source['filename']} "
+                                f"| chunk {source['chunk_index']}**"
+                            )
+                            if source.get("page_number") is not None:
+                                st.caption(f"page={source['page_number']}")
+                            st.write(source["excerpt"])
+
+                st.caption(
+                    "AI-assisted review is broader than deterministic checking, but it is screening only. "
+                    "It depends on retrieval quality and should not be treated as final compliance advice."
                 )

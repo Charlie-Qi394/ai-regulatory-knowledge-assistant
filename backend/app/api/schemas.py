@@ -71,6 +71,7 @@ class ComplianceSummary(BaseModel):
     passed: int
     failed: int
     needs_review: int
+    insufficient_context: int = 0
 
 
 class ComplianceCheckResponse(BaseModel):
@@ -79,3 +80,26 @@ class ComplianceCheckResponse(BaseModel):
     filename: str
     summary: ComplianceSummary
     results: list[ComplianceResult]
+
+
+class AiComplianceResult(BaseModel):
+    """One AI-assisted Excel review result."""
+
+    row_index: int
+    parameter: str
+    input_value: Optional[float]
+    input_unit: str
+    category: str
+    status: str
+    requirement: str
+    reasoning: str
+    citations: list[str]
+    sources: list[SourceResponse]
+
+
+class AiComplianceCheckResponse(BaseModel):
+    """Response returned by POST /review-excel-ai."""
+
+    filename: str
+    summary: ComplianceSummary
+    results: list[AiComplianceResult]

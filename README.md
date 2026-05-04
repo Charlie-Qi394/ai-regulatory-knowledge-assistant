@@ -10,7 +10,7 @@ Important: this project is for education and portfolio demonstration only. It is
 
 The AI Regulatory Knowledge Assistant lets a user ask natural-language questions about a local collection of regulatory or technical documents. The app ingests documents, chunks them, creates embeddings, stores vectors in PostgreSQL using pgvector, retrieves relevant chunks for a question, and generates a grounded answer with source references.
 
-It also includes a small Excel compliance-checking MVP. Users can upload a `.xlsx` workbook with product values, and the backend applies selected deterministic FSANZ infant-formula numeric checks, including simple unit conversion where the required supporting value is available.
+It also includes an Excel compliance-checking MVP. Users can upload a `.xlsx` workbook with product values, run selected deterministic FSANZ infant-formula numeric checks, or run a broader AI-assisted review that retrieves relevant regulatory context and asks the LLM to screen each row with citations.
 
 Supported document types:
 
@@ -46,7 +46,7 @@ The project shows how I think about:
 
 ## 3. Key Features
 
-- FastAPI backend with health check, `/ask`, `/history`, and `/check-excel` endpoints
+- FastAPI backend with health check, `/ask`, `/history`, `/check-excel`, and `/review-excel-ai` endpoints
 - Streamlit frontend for asking questions and reviewing sources
 - PostgreSQL database with pgvector vector search
 - Document ingestion for `.txt`, `.pdf`, and `.docx`
@@ -60,7 +60,7 @@ The project shows how I think about:
 - Simple CSV evaluation for regression checks
 - Optional RAGAS evaluation for advanced RAG diagnostics
 - Docker Compose setup for PostgreSQL, backend, and frontend
-- Excel upload checker for selected deterministic infant-formula compliance calculations
+- Excel upload checker with deterministic and AI-assisted review modes
 
 ## 4. Tech Stack
 
@@ -105,7 +105,7 @@ Dev and deployment:
                 |   localhost:8501     |
                 +----------+-----------+
                            |
-                           | HTTP /ask, /history, /check-excel
+                           | HTTP /ask, /history, /check-excel, /review-excel-ai
                            v
                 +----------------------+
                 |   FastAPI Backend    |
@@ -133,6 +133,19 @@ Excel workbook
 ```
 
 This separation is intentional. The LLM can help answer document questions, but numerical compliance calculations should be explicit, testable Python logic.
+
+The app also provides an AI-assisted Excel review path for broader screening:
+
+```text
+Excel workbook
+  -> parse rows with openpyxl
+  -> retrieve regulatory chunks for each row
+  -> ask the LLM to assess only from retrieved context
+  -> return PASS, FAIL, NEEDS_REVIEW, or INSUFFICIENT_CONTEXT
+  -> display citations and retrieved source excerpts
+```
+
+This mode is broader than deterministic checking, but it is not final compliance confirmation.
 
 Project structure:
 
@@ -358,6 +371,16 @@ Current deterministic checks:
 
 Protein values entered as `g/L` can be converted to `g/100 kJ` when the workbook also includes energy in `kJ/L`.
 
+The same tab also includes `Run AI-assisted review`. This mode:
+
+- retrieves relevant regulatory chunks for each Excel row
+- asks the chat model to assess the row using only retrieved context
+- returns `PASS`, `FAIL`, `NEEDS_REVIEW`, or `INSUFFICIENT_CONTEXT`
+- shows source excerpts used for each row
+- should be treated as screening support, not final compliance advice
+
+Use deterministic checks when exact rules are already coded. Use AI-assisted review when you want broader coverage across workbook rows and are comfortable reviewing the cited evidence.
+
 Run tests:
 
 ```bash
@@ -555,6 +578,8 @@ docs/screenshots/
 - Query history stores questions and answers but does not include user accounts or authentication.
 - There is no document upload UI yet; documents are added through `data/sample_docs/`.
 - The Excel checker supports only a small set of deterministic demonstration rules.
+- The AI-assisted Excel review depends on retrieval quality and model interpretation.
+- AI-assisted Excel statuses are screening outputs, not authoritative compliance determinations.
 - Excel checks do not replace expert regulatory, quality, or legal review.
 - No production security hardening, access control, audit logging, or deployment pipeline is included.
 - RAGAS metrics are useful for diagnostics but do not prove regulatory correctness.
@@ -563,6 +588,8 @@ docs/screenshots/
 
 - Add a document upload workflow in the Streamlit UI.
 - Expand the Excel checker with more structured templates and additional rules.
+- Add human-review override fields and reviewer notes for AI-assisted Excel results.
+- Add source-clause extraction so AI-assisted Excel reviews cite narrower clauses.
 - Add table extraction from PDFs to help map clause references into deterministic checks.
 - Add hybrid retrieval using keyword search plus vector search.
 - Improve PDF table extraction and clause-level citation handling.

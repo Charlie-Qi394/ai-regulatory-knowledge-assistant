@@ -1,8 +1,8 @@
 """Deterministic Excel compliance checks for selected infant-formula rules.
 
-The LLM should not perform regulatory calculations. This module parses a simple
-Excel input, applies explicit Python calculations, and returns auditable
-pass/fail/needs-review rows with source notes.
+This module parses a simple Excel input, applies explicit Python calculations,
+and returns auditable pass/fail/needs-review rows with source notes. Broader
+AI-assisted screening lives in `ai_excel_reviewer.py`.
 """
 
 from __future__ import annotations

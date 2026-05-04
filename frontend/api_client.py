@@ -49,3 +49,20 @@ def check_excel_file(filename: str, content: bytes) -> dict[str, Any]:
     )
     response.raise_for_status()
     return response.json()
+
+
+def review_excel_file_with_ai(filename: str, content: bytes) -> dict[str, Any]:
+    """Send an Excel workbook to the FastAPI `/review-excel-ai` endpoint."""
+    response = requests.post(
+        f"{get_api_base_url()}/review-excel-ai",
+        files={
+            "file": (
+                filename,
+                content,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        timeout=180,
+    )
+    response.raise_for_status()
+    return response.json()

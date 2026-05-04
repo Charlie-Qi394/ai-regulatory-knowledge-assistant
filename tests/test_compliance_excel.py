@@ -104,3 +104,63 @@ def test_check_excel_endpoint_rejects_non_xlsx_upload() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Please upload a .xlsx file."
+
+
+def test_ai_review_excel_endpoint_accepts_xlsx_upload(monkeypatch) -> None:
+    workbook_bytes = build_workbook([("Vitamin A", 80, "ug RE/100 kJ", "infant formula")])
+
+    def fake_ai_review_excel_workbook(content: bytes) -> dict[str, object]:
+        assert content == workbook_bytes
+        return {
+            "summary": {
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "needs_review": 0,
+                "insufficient_context": 0,
+            },
+            "results": [
+                {
+                    "row_index": 1,
+                    "parameter": "Vitamin A",
+                    "input_value": 80.0,
+                    "input_unit": "ug RE/100 kJ",
+                    "category": "infant formula",
+                    "status": "PASS",
+                    "requirement": "Example requirement.",
+                    "reasoning": "The value meets the requirement [Source 1].",
+                    "citations": ["[Source 1]"],
+                    "sources": [
+                        {
+                            "source_id": 1,
+                            "filename": "FSANZ Schedule 29.pdf",
+                            "chunk_index": 4,
+                            "page_number": 12,
+                            "distance": 0.1,
+                            "similarity": 0.9,
+                            "excerpt": "Example requirement.",
+                        }
+                    ],
+                }
+            ],
+        }
+
+    monkeypatch.setattr("backend.app.api.routes.ai_review_excel_workbook", fake_ai_review_excel_workbook)
+
+    client = TestClient(app)
+    response = client.post(
+        "/review-excel-ai",
+        files={
+            "file": (
+                "product_check.xlsx",
+                workbook_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["filename"] == "product_check.xlsx"
+    assert body["summary"]["passed"] == 1
+    assert body["results"][0]["citations"] == ["[Source 1]"]
